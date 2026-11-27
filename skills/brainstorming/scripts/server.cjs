@@ -110,7 +110,7 @@ function isFullDocument(html) {
 }
 
 function wrapInFrame(content) {
-  return frameTemplate.replace('<!-- CONTENT -->', content);
+  return frameTemplate.replace('<!-- CONTENT -->', () => content);
 }
 
 function getNewestScreen() {
@@ -118,8 +118,14 @@ function getNewestScreen() {
     .filter(f => f.endsWith('.html'))
     .map(f => {
       const fp = path.join(CONTENT_DIR, f);
-      return { path: fp, mtime: fs.statSync(fp).mtime.getTime() };
+      try {
+        const stat = fs.statSync(fp);
+        return stat.isFile() ? { path: fp, mtime: stat.mtime.getTime() } : null;
+      } catch (e) {
+        return null;
+      }
     })
+    .filter(Boolean)
     .sort((a, b) => b.mtime - a.mtime);
   return files.length > 0 ? files[0].path : null;
 }
@@ -128,24 +134,52 @@ function getNewestScreen() {
 
 function handleRequest(req, res) {
   touchActivity();
-  if (req.method === 'GET' && req.url === '/') {
+  let pathname;
+  try {
+    pathname = new URL(req.url, 'http://localhost').pathname;
+  } catch (e) {
+    res.writeHead(400);
+    res.end('Bad request');
+    return;
+  }
+
+  if (req.method === 'GET' && pathname === '/') {
     const screenFile = getNewestScreen();
     let html = screenFile
       ? (raw => isFullDocument(raw) ? raw : wrapInFrame(raw))(fs.readFileSync(screenFile, 'utf-8'))
       : WAITING_PAGE;
 
     if (html.includes('</body>')) {
-      html = html.replace('</body>', helperInjection + '\n</body>');
+      html = html.replace('</body>', () => helperInjection + '\n</body>');
     } else {
       html += helperInjection;
     }
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(html);
-  } else if (req.method === 'GET' && req.url.startsWith('/files/')) {
-    const fileName = req.url.slice(7);
-    const filePath = path.join(CONTENT_DIR, path.basename(fileName));
-    if (!fs.existsSync(filePath)) {
+  } else if (req.method === 'GET' && pathname.startsWith('/files/')) {
+    let decodedName;
+    try {
+      decodedName = decodeURIComponent(pathname.slice(7));
+    } catch (e) {
+      res.writeHead(400);
+      res.end('Bad request');
+      return;
+    }
+    const baseName = path.basename(decodedName);
+    if (!baseName) {
+      res.writeHead(404);
+      res.end('Not found');
+      return;
+    }
+    const filePath = path.join(CONTENT_DIR, baseName);
+    let stat;
+    try {
+      stat = fs.statSync(filePath);
+    } catch (e) {
+      stat = null;
+    }
+    if (!stat || !stat.isFile()) {
       res.writeHead(404);
       res.end('Not found');
       return;
@@ -298,7 +332,10 @@ function startServer() {
   });
   watcher.on('error', (err) => console.error('fs.watch error:', err.message));
 
+  let shuttingDown = false;
   function shutdown(reason) {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(JSON.stringify({ type: 'server-stopped', reason }));
     const infoFile = path.join(STATE_DIR, 'server-info');
     if (fs.existsSync(infoFile)) fs.unlinkSync(infoFile);
@@ -308,6 +345,15 @@ function startServer() {
     );
     watcher.close();
     clearInterval(lifecycleCheck);
+    const closeFrame = encodeFrame(OPCODES.CLOSE, Buffer.alloc(0));
+    for (const socket of clients) {
+      try { socket.end(closeFrame); } catch (e) {}
+      socket.destroy();
+    }
+    clients.clear();
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
+    }
     server.close(() => process.exit(0));
   }
 
@@ -351,4 +397,4 @@ if (require.main === module) {
   startServer();
 }
 
-module.exports = { computeAcceptKey, encodeFrame, decodeFrame, OPCODES };
+module.exports = { computeAcceptKey, encodeFrame, decodeFrame, OPCODES, isFullDocument, wrapInFrame };

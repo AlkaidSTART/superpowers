@@ -384,6 +384,16 @@ function runTests() {
     assert.deepStrictEqual(decoded, msg);
   });
 
+  // ========== Template Wrapping ==========
+  console.log('\n--- Template Wrapping ---');
+
+  test('wrapInFrame preserves special replacement patterns ($&, $\', $`, $$)', () => {
+    const content = '<pre>regex: $& and $\' and $` and $100 ($$)</pre>';
+    const wrapped = ws.wrapInFrame(content);
+    assert(wrapped.includes(content), 'Content with $ replacement sequences should be preserved verbatim');
+    assert(!wrapped.includes('<!-- CONTENT -->'), 'Placeholder should not remain in wrapped output');
+  });
+
   // ========== Summary ==========
   console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
   if (failed > 0) process.exit(1);
