@@ -184,6 +184,41 @@ async function runTests() {
       assert.strictEqual(res.status, 404);
     });
 
+    await test('serves root screen when query parameters are present', async () => {
+      const res = await fetch(`http://localhost:${TEST_PORT}/?cachebust=1`);
+      assert.strictEqual(res.status, 200);
+      assert(res.body.includes('Newer'), 'Should serve newest screen with query string');
+    });
+
+    await test('preserves $ replacement patterns in fragment content', async () => {
+      const special = '<p>Patterns: $&amp; $& and $\' and $` and $$</p>';
+      fs.writeFileSync(path.join(CONTENT_DIR, 'dollar-patterns.html'), special);
+      await sleep(300);
+
+      const res = await fetch(`http://localhost:${TEST_PORT}/`);
+      assert.strictEqual(res.status, 200);
+      assert(res.body.includes(special), 'Should preserve $ replacement sequences verbatim');
+      assert(!res.body.includes('<!-- CONTENT -->'), 'Should not re-insert placeholder');
+    });
+
+    await test('serves URL-encoded filenames and ignores query strings under /files/', async () => {
+      fs.writeFileSync(path.join(CONTENT_DIR, 'my diagram.svg'), '<svg>ok</svg>');
+      const res = await fetch(`http://localhost:${TEST_PORT}/files/my%20diagram.svg?v=1`);
+      assert.strictEqual(res.status, 200);
+      assert(res.headers['content-type'].includes('image/svg+xml'));
+      assert.strictEqual(res.body, '<svg>ok</svg>');
+    });
+
+    await test('returns 404 for /files/ directory path without crashing', async () => {
+      const res = await fetch(`http://localhost:${TEST_PORT}/files/`);
+      assert.strictEqual(res.status, 404);
+    });
+
+    await test('returns 400 for malformed percent-encoding under /files/', async () => {
+      const res = await fetch(`http://localhost:${TEST_PORT}/files/%E0%A4%A`);
+      assert.strictEqual(res.status, 400);
+    });
+
     // ========== WebSocket Communication ==========
     console.log('\n--- WebSocket Communication ---');
 
@@ -393,6 +428,8 @@ async function runTests() {
       assert(helperContent.includes('sendEvent'), 'Should define sendEvent');
       assert(helperContent.includes('selectedChoice'), 'Should track selectedChoice');
       assert(helperContent.includes('brainstorm'), 'Should expose brainstorm API');
+      assert(helperContent.includes('wss://'), 'Should support wss:// on HTTPS pages');
+      assert(!helperContent.includes('indicator.innerHTML'), 'Should avoid unsafe innerHTML interpolation');
       return Promise.resolve();
     });
 
